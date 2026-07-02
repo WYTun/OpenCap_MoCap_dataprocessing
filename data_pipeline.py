@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 from scipy.interpolate import CubicSpline
 import glob
+from scipy import signal
+import matplotlib.pyplot as plt
 
 #mapping MoCap and OpenCap markers
 MARKER_MAPPING = {
@@ -50,6 +52,36 @@ def load_trc_files(file_path):
 
     return df, data_rate
 
+def sync_timestamps(df_ref, df_target, marker_col, fps_ref):
+    dt = 1.0 / fps_ref
+
+    #create uniform time vectors for both reference and target dataframes
+    t_ref_uniform = np.arange(0, df_ref['Time'].max() - df_ref['Time'].min(), dt)
+    t_tgt_uniform = np.arange(0, df_target['Time'].max() - df_target['Time'].min(), dt)
+
+    #Interpolate both signals
+    sig_ref = CubicSpline(df_ref['Time'], df_ref[marker_col])(t_ref_uniform + df_ref['Time'].min())
+    sig_tgt = CubicSpline(df_target['Time'], df_target[marker_col])(t_tgt_uniform + df_target['Time'].min())
+
+    #normalize signals
+    sig_ref = (sig_ref - np.mean(sig_ref)) / np.std(sig_ref)
+    sig_tgt = (sig_tgt - np.mean(sig_tgt)) / np.std(sig_tgt)
+
+    # 4. Perform cross-correlation
+    correlation = signal.correlate(sig_ref, sig_tgt, mode='full')
+    lags = signal.correlation_lags(len(sig_ref), len(sig_tgt), mode='full')
+
+    # 5. Find the lag with the highest correlation match
+    best_lag = lags[np.argmax(correlation)]
+    
+    # 6. Convert lag to seconds and shift the target timeframe
+    time_offset = best_lag * dt
+    df_target['Time'] = df_target['Time'] + time_offset
+
+    print(f"    -> Applied time shift: {time_offset:.4f} seconds")
+    return df_target
+
+
 def align_columns(df_opencap, df_mocap, marker_dict):
     print("  -> Aligning OpenCap column names and filtering extra markers...")
     
@@ -69,6 +101,45 @@ def align_columns(df_opencap, df_mocap, marker_dict):
 
     return df_aligned
 
+def save_sync_validation_plot(df_mocap, df_opencap, marker_col, trial_name, output_folder, label="Side"):
+    """
+    Generates and saves a line plot comparing the MoCap and OpenCap trajectories
+    to visually verify that the cross-correlation time sync was successful.
+    """
+    print(f"    -> Saving visual sync check for {label} camera...")
+    
+    plt.figure(figsize=(12, 5))
+    
+    # Plot MoCap as a thick black line
+    plt.plot(df_mocap['Time'], df_mocap[marker_col], 
+             label='MoCap (Reference)', color='black', linewidth=2.5, alpha=0.7)
+    
+    # Plot OpenCap as a dashed red/blue line
+    plot_color = 'red' if label.lower() == 'side' else 'blue'
+    plt.plot(df_opencap['Time'], df_opencap[marker_col], 
+             label=f'OpenCap {label} (Shifted)', color=plot_color, linestyle='--', linewidth=2)
+    
+    # Format the graph
+    plt.title(f"Time Sync Validation: {trial_name} ({marker_col})")
+    plt.xlabel("Time (seconds)")
+    plt.ylabel(f"Position of {marker_col}")
+    plt.legend(loc='upper right')
+    plt.grid(True, linestyle=':', alpha=0.6)
+    
+    # Zoom in on the overlapping window so the graph isn't dominated by empty space
+    min_time = max(df_opencap['Time'].min(), df_mocap['Time'].min())
+    max_time = min(df_opencap['Time'].max(), df_mocap['Time'].max())
+    
+    # Add a 2-second buffer on either side for visual context
+    plt.xlim(min_time - 2, max_time + 2) 
+    
+    # Save the plot
+    os.makedirs(output_folder, exist_ok=True)
+    plot_path = os.path.join(output_folder, f"sync_check_{trial_name}_{label}.png")
+    plt.tight_layout()
+    plt.savefig(plot_path, dpi=150)
+    plt.close() # Close the figure to free up memory
+
 def process_and_align_trajectories(opencap_side_path,opencap_front_path,mocap_path, output_path):
     """
     Loads both files, extracts overlapping times, interpolates 
@@ -85,6 +156,16 @@ def process_and_align_trajectories(opencap_side_path,opencap_front_path,mocap_pa
     df_opencap_front = align_columns(df_opencap_front, df_mocap, MARKER_MAPPING)
     #display fps
     print(f"-> OpenCap Side: {fps_opencap_side}Hz | OpenCap Front: {fps_opencap_front}Hz | MoCap: {fps_mocap}Hz")
+
+    sync_marker = 'C7_Y'
+    df_opencap_side = sync_timestamps(df_mocap, df_opencap_side, sync_marker, fps_mocap)
+    df_opencap_front = sync_timestamps(df_mocap, df_opencap_front, sync_marker, fps_mocap)
+
+    save_sync_validation_plot(df_mocap, df_opencap_side, sync_marker, 
+                              base_name, os.path.dirname(output_path), label="Side")
+                              
+    save_sync_validation_plot(df_mocap, df_opencap_front, sync_marker, 
+                              base_name, os.path.dirname(output_path), label="Front")
 
     mapped_cols = set(df_opencap_side.columns)
     unmatched_cols = [col for col in df_mocap.columns if col not in mapped_cols and col not in ['Frame#', 'Time']]
@@ -132,6 +213,8 @@ def process_and_align_trajectories(opencap_side_path,opencap_front_path,mocap_pa
     df_opencap_front_resampled.to_csv(opencap_front_out, index=False)
 
 
+
+
 if __name__ == "__main__":
     
     opencapSide_folder = "raw_data/Opencap_Side/MarkerData/"
@@ -164,3 +247,15 @@ if __name__ == "__main__":
 
     print("\n Batch processing completely finished!")
 
+df_debug, _ = load_trc_files(front_path)
+
+plt.figure(figsize=(10, 4))
+plt.plot(df_debug['Time'], df_debug['C7_X'], label='X (Side-to-Side?)')
+plt.plot(df_debug['Time'], df_debug['C7_Y'], label='Y (Vertical?)')
+plt.plot(df_debug['Time'], df_debug['C7_Z'], label='Z (Forward?)')
+
+plt.title("Raw OpenCap Front: Find the Walking Wave")
+plt.xlabel("Raw Time (seconds)")
+plt.legend()
+plt.grid(True)
+plt.show()
