@@ -4,6 +4,22 @@ import numpy as np
 from scipy.interpolate import CubicSpline
 import glob
 
+#mapping MoCap and OpenCap markers
+MARKER_MAPPING = {
+    "C7": "C7", "sternum": "STRN", 
+    "r_ASIS": "RASI", "l_ASIS": "LASI", 
+    "r_PSIS": "RPSI", "l_PSIS": "LPSI",
+    "r_shoulder": "RSHO", "l_shoulder": "LSHO",
+    "r_elbow": "RELB", "l_elbow": "LELB",
+    "r_wrist_radius": "RWRA", "l_wrist_radius": "LWRA",
+    "r_wrist_ulna": "RWRB", "l_wrist_ulna": "LWRB",
+    "r_index": "RFIN", "l_index": "LFIN",
+    "r_knee": "RKNE", "l_knee": "LKNE",
+    "r_ankle": "RANK", "l_ankle": "LANK",
+    "r_calc": "RHEE", "l_calc": "LHEE",
+    "r_toe": "RTOE", "l_toe": "LTOE"
+}
+
 def load_trc_files(file_path):
     """
     Reads a OpenSim .trc marker file, skips the metadata headers,
@@ -34,6 +50,25 @@ def load_trc_files(file_path):
 
     return df, data_rate
 
+def align_columns(df_opencap, df_mocap, marker_dict):
+    print("  -> Aligning OpenCap column names and filtering extra markers...")
+    
+    full_column_mapping = {}
+    for opencap_name, mocap_name in marker_dict.items():
+        full_column_mapping[f"{opencap_name}_X"] = f"{mocap_name}_X"
+        full_column_mapping[f"{opencap_name}_Y"] = f"{mocap_name}_Y"
+        full_column_mapping[f"{opencap_name}_Z"] = f"{mocap_name}_Z"
+
+    df_opencap_renamed = df_opencap.rename(columns=full_column_mapping)
+
+    mocap_columns = set(df_mocap.columns)
+    opencap_columns = set(df_opencap_renamed.columns)
+
+    columns_to_keep = ['Time'] + [col for col in df_mocap.columns if col in opencap_columns and col != 'Time']
+    df_aligned = df_opencap_renamed[columns_to_keep]
+
+    return df_aligned
+
 def process_and_align_trajectories(opencap_side_path,opencap_front_path,mocap_path, output_path):
     """
     Loads both files, extracts overlapping times, interpolates 
@@ -45,8 +80,21 @@ def process_and_align_trajectories(opencap_side_path,opencap_front_path,mocap_pa
     df_opencap_front, fps_opencap_front = load_trc_files(opencap_front_path)
     df_mocap, fps_mocap = load_trc_files(mocap_path)
 
+    #filter and align OpenCap columns to match MoCap
+    df_opencap_side = align_columns(df_opencap_side, df_mocap, MARKER_MAPPING)
+    df_opencap_front = align_columns(df_opencap_front, df_mocap, MARKER_MAPPING)
     #display fps
     print(f"-> OpenCap Side: {fps_opencap_side}Hz | OpenCap Front: {fps_opencap_front}Hz | MoCap: {fps_mocap}Hz")
+
+    mapped_cols = set(df_opencap_side.columns)
+    unmatched_cols = [col for col in df_mocap.columns if col not in mapped_cols and col not in ['Frame#', 'Time']]
+
+    if unmatched_cols:
+        unique_unmatched_markers = sorted(list(set([c.rsplit('_', 1)[0] for c in  unmatched_cols])))
+        print(f"     {unique_unmatched_markers}")
+
+    mocap_cols_to_keep = [col for col in df_mocap.columns if col in mapped_cols or col in ['Time']]
+    df_mocap = df_mocap[mocap_cols_to_keep]
 
     #find overlapping time window
     start_time = max(df_opencap_side['Time'].min(), df_opencap_front['Time'].min(), df_mocap['Time'].min())
