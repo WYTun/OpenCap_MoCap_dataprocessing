@@ -1,26 +1,7 @@
-import os
-import glob
 import pandas as pd
 import matplotlib.pyplot as plt
-
-def load_trc_files(file_path):
-    """Utility function to load the raw TRC files for the 'Before' plots."""
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
-    
-    raw_markers = lines[3].strip().split('\t')
-    markers = [m.strip() for m in raw_markers if m.strip() != '']
-
-    clean_columns = ['Frame#', 'Time']
-    for marker in markers[2:]:
-        clean_columns.extend([f"{marker}_X", f"{marker}_Y", f"{marker}_Z"])
-
-    df = pd.read_csv(file_path, skiprows=5, sep='\t', header=None) 
-    df = df.dropna(axis=1, how='all')
-    df = df.iloc[:, :len(clean_columns)]
-    df.columns = clean_columns
-    df = df.dropna(subset=['Time'])
-    return df
+import os
+from data_pipeline import load_trc_files
 
 def generate_presentation_plot(mocap_raw, opencap_raw, mocap_clean, opencap_clean, marker_col, trial_name, output_folder):
     """Generates a high-resolution, side-by-side 'Before and After' plot."""
@@ -82,54 +63,3 @@ def generate_presentation_plot(mocap_raw, opencap_raw, mocap_clean, opencap_clea
     plt.savefig(save_path, dpi=300) # High-res for presentations
     plt.close()
     print(f"  -> Generated: {save_path}")
-
-if __name__ == "__main__":
-    # Define directories
-    raw_mocap_dir = "raw_data/MoCap_Data/MarkerData/"
-    raw_opencap_dir = "raw_data/Opencap_Front/MarkerData/"
-    processed_dir = "processed_data/"
-    output_images_dir = "presentation_images/"
-    
-    # Marker to visualize (C7_Y is usually the best indicator of sync success)
-    marker_to_plot = "C7_Y"
-    
-    print("Scanning for processed trials to plot...\n")
-    
-    # Find all the raw TRC files
-    search_pattern = os.path.join(raw_opencap_dir, "*.trc")
-    raw_side_files = glob.glob(search_pattern)
-    
-    for raw_opencap_path in raw_side_files:
-        filename = os.path.basename(raw_opencap_path)
-        base_name = filename.replace(".trc", "")
-        
-        # Define paths for the 3 other required files
-        raw_mocap_path = os.path.join(raw_mocap_dir, filename)
-        clean_mocap_path = os.path.join(processed_dir, f"aligned_{base_name}_mocap_cleaned.csv")
-        clean_opencap_path = os.path.join(processed_dir, f"aligned_{base_name}_opencap_side_resampled.csv")
-        
-        # Check if all files exist (meaning the pipeline succeeded for this trial)
-        if not all(os.path.exists(p) for p in [raw_mocap_path, clean_mocap_path, clean_opencap_path]):
-            print(f"[SKIP] Missing processed or raw files for {base_name}. It may have failed in processing.")
-            continue
-            
-        print(f"Plotting {base_name}...")
-        
-        # Load the data
-        df_mocap_raw = load_trc_files(raw_mocap_path)
-        df_opencap_raw = load_trc_files(raw_opencap_path)
-        df_mocap_clean = pd.read_csv(clean_mocap_path)
-        df_opencap_clean = pd.read_csv(clean_opencap_path)
-        
-        # Generate the presentation graphic
-        generate_presentation_plot(
-            mocap_raw=df_mocap_raw,
-            opencap_raw=df_opencap_raw,
-            mocap_clean=df_mocap_clean,
-            opencap_clean=df_opencap_clean,
-            marker_col=marker_to_plot,
-            trial_name=base_name,
-            output_folder=output_images_dir
-        )
-        
-    print("\nAll presentation plots generated successfully!")
