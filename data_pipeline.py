@@ -91,7 +91,7 @@ if __name__ == "__main__":
     output_images_dir = "presentation_images/"
     
     # Marker to visualize (C7_Y is usually the best indicator of sync success)
-    marker_to_plot = "C7_Y"
+    marker_to_plot = "RKNE_Z"
     
     print("Scanning for processed trials to plot...\n")
     
